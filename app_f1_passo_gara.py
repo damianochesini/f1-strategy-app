@@ -7,14 +7,14 @@ import os
 import pandas as pd
 import numpy as np
 
-# --- CONFIGURAZIONE CACHE ---
-cache_dir = 'f1_cache_v21_6'
+# --- CONFIGURAZIONE ---
+cache_dir = 'f1_cache_v22_6'
 if not os.path.exists(cache_dir): os.makedirs(cache_dir)
 fastf1.Cache.enable_cache(cache_dir)
 
-st.set_page_config(page_title="F1 Mobile Pro v21.6", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="F1 Pit-Wall Pro v22.6", layout="wide", initial_sidebar_state="collapsed")
 
-# --- FUNZIONI FORMATTAZIONE ---
+# --- FUNZIONI DI FORMATTAZIONE ---
 def format_laptime(seconds):
     if pd.isna(seconds) or seconds <= 0: return "N/A"
     minutes = int(seconds // 60)
@@ -24,9 +24,6 @@ def format_laptime(seconds):
 def format_time_td(td):
     return format_laptime(td.total_seconds()) if pd.notna(td) else "N/A"
 
-def format_sector(td):
-    return f"{td.total_seconds():.3f}s" if pd.notna(td) else "N/A"
-
 def get_cleaned_laps(laps_driver):
     if laps_driver is None or len(laps_driver) == 0: return pd.DataFrame()
     quick_laps = laps_driver.pick_quicklaps().dropna(subset=['LapTime']).copy()
@@ -35,146 +32,160 @@ def get_cleaned_laps(laps_driver):
     return quick_laps[quick_laps['LapTime'].dt.total_seconds() < (median_val * 1.10)]
 
 # --- SIDEBAR ---
-st.sidebar.title("🏎️ F1 Analysis")
-tipo_mode = st.sidebar.radio("MODALITÀ:", ["🚀 Giro Veloce", "📈 Passo Gara"])
+with st.sidebar:
+    st.header("⚙️ Setup Sessione")
+    anno = st.selectbox("Anno", [2026, 2025, 2024], index=1)
+    
+    # Recupero dinamico dei circuiti per l'anno selezionato
+    try:
+        schedule = fastf1.get_event_schedule(anno)
+        # Filtriamo solo gli eventi che non sono test e hanno un nome
+        eventi = schedule[schedule['EventName'].str.contains("Grand Prix")]['EventName'].tolist()
+    except:
+        eventi = ["Monza", "Monaco", "Silverstone", "Spa"] # Fallback in caso di errore
+    
+    pista_scelta = st.selectbox("Circuito", eventi)
+    sessione_tipo = st.selectbox("Sessione", ["R", "Q", "FP2", "FP1", "FP3"])
+    
+    st.divider()
+    st.subheader("🛠️ Telemetria")
+    show_delta = st.checkbox("Delta Time Chart", value=True)
+    show_speed = st.checkbox("Velocità", value=True)
+    show_throttle = st.checkbox("Acceleratore", value=True)
+    show_brake = st.checkbox("Freno", value=True)
 
-# Configurazione Telemetria
-show_delta = show_speed = show_throttle = show_brake = True
-if "Giro Veloce" in tipo_mode:
-    st.sidebar.subheader("Grafici Telemetria:")
-    show_delta = st.sidebar.checkbox("Delta Time", value=True)
-    show_speed = st.sidebar.checkbox("Velocità", value=True)
-    show_throttle = st.sidebar.checkbox("Acceleratore", value=True)
-    show_brake = st.sidebar.checkbox("Freno", value=True)
-
-st.sidebar.divider()
-anno = st.sidebar.selectbox("Anno", [2026, 2025, 2024], index=1)
-pista_input = st.sidebar.text_input("Circuito", "Monza")
-sessione_tipo = st.sidebar.selectbox("Sessione", ["R", "Q", "FP2", "FP1", "FP3"])
-
-if 'ss' not in st.session_state: st.session_state.ss = None
-if 'data_ready' not in st.session_state: st.session_state.data_ready = False
-
-if st.sidebar.button("CARICA / AGGIORNA DATI"):
-    with st.spinner('Sincronizzazione dati...'):
-        try:
-            session = fastf1.get_session(anno, pista_input.strip(), sessione_tipo)
-            session.load()
-            st.session_state.ss = session
-            st.session_state.data_ready = True
-            st.rerun()
-        except Exception as e:
-            st.error(f"Errore: {e}")
+    if st.button("🚀 AGGIORNA DATI", use_container_width=True):
+        with st.spinner('Sincronizzazione dati...'):
+            try:
+                session = fastf1.get_session(anno, pista_scelta, sessione_tipo)
+                session.load()
+                st.session_state.ss = session
+                st.session_state.data_ready = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Errore: {e}")
 
 # --- DASHBOARD ---
-if st.session_state.data_ready and st.session_state.ss is not None:
+if 'data_ready' in st.session_state and st.session_state.data_ready:
     ss = st.session_state.ss
     laps_all = ss.laps
     
-    # Intestazione Circuito
-    col_t1, col_t2 = st.columns([2, 1])
-    with col_t1:
-        st.markdown(f"## {ss.event['EventName'].upper()}")
-        st.markdown(f"**📍 {ss.event['Location']}** | {sessione_tipo} {anno}")
-    with col_t2:
-        best_lap_ever = laps_all.pick_fastest()
-        t_map = best_lap_ever.get_telemetry()
-        fig_mini_map = go.Figure()
-        fig_mini_map.add_trace(go.Scatter(x=t_map['X'], y=t_map['Y'], line=dict(color='#e10600', width=3), hoverinfo='skip'))
-        fig_mini_map.update_layout(height=100, margin=dict(l=0,r=0,t=0,b=0), xaxis_visible=False, yaxis_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_mini_map, use_container_width=True, config={'displayModeBar': False})
-    
+    # Riferimento Purple
+    absolute_best_lap = laps_all.pick_fastest()
+    abs_best_time = absolute_best_lap.LapTime.total_seconds()
+    abs_best_driver = absolute_best_lap.Driver
+
+    # Header
+    c_col1, c_col2 = st.columns([2, 1])
+    with c_col1:
+        st.subheader(f"🏁 {ss.event['EventName'].upper()}")
+        st.caption(f"📍 {ss.event['Location']} | {sessione_tipo} {anno}")
+    with c_col2:
+        best_t = absolute_best_lap.get_telemetry()
+        fig_map = go.Figure(go.Scatter(x=best_t['X'], y=best_t['Y'], line=dict(color='#9467bd', width=2), hoverinfo='skip'))
+        fig_map.update_layout(height=80, margin=dict(l=0,r=0,t=0,b=0), xaxis_visible=False, yaxis_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_map, use_container_width=True, config={'displayModeBar': False})
+
     st.divider()
 
+    # Selezione Piloti
     drivers = sorted(laps_all['Driver'].unique().tolist())
-    col_p1, col_p2 = st.columns(2)
-    p1 = col_p1.selectbox("Pilota 1", drivers, index=0)
-    p2 = col_p2.selectbox("Pilota 2", drivers, index=1 if len(drivers)>1 else 0)
-    
+    p_col1, p_col2 = st.columns(2)
+    p1 = p_col1.selectbox("Pilota 1", drivers, index=0)
+    p2 = p_col2.selectbox("Pilota 2", drivers, index=1 if len(drivers)>1 else 0)
     c1 = fastf1.plotting.get_driver_color(p1, session=ss)
     c2 = fastf1.plotting.get_driver_color(p2, session=ss)
 
-    if "Giro Veloce" in tipo_mode:
-        # (Codice Giro Veloce - Invariato)
+    tab_fast, tab_pace = st.tabs(["🚀 GIRO VELOCE", "📈 PASSO GARA"])
+
+    # --- TAB GIRO VELOCE ---
+    with tab_fast:
+        st.info(f"🟣 **Session Best (Purple):** {abs_best_driver} | **{format_laptime(abs_best_time)}**")
+        
         b1 = laps_all.pick_driver(p1).pick_fastest()
         b2 = laps_all.pick_driver(p2).pick_fastest()
-        m1, m2 = st.columns(2)
-        with m1:
-            st.metric(f"Best {p1}", format_time_td(b1.LapTime))
-            st.caption(f"S1: {format_sector(b1.Sector1Time)} | S2: {format_sector(b1.Sector2Time)} | S3: {format_sector(b1.Sector3Time)}")
-        with m2:
-            st.metric(f"Best {p2}", format_time_td(b2.LapTime))
-            st.caption(f"S1: {format_sector(b2.Sector1Time)} | S2: {format_sector(b2.Sector2Time)} | S3: {format_sector(b2.Sector3Time)}")
 
-        active_plots = []
-        if show_delta: active_plots.append("DELTA TIME (s)")
-        if show_speed: active_plots.append("VELOCITÀ (km/h)")
-        if show_throttle: active_plots.append("GAS (%)")
-        if show_brake: active_plots.append("FRENO")
+        # METRICHE GAP
+        st.markdown("### ⏱️ Analisi Distacchi")
+        gap_p1_abs = b1.LapTime.total_seconds() - abs_best_time
+        gap_p2_abs = b2.LapTime.total_seconds() - abs_best_time
+        gap_rel = b1.LapTime.total_seconds() - b2.LapTime.total_seconds()
 
-        if active_plots:
+        g_col1, g_col2, g_col3 = st.columns(3)
+        g_col1.metric(f"{p1} vs Purple", f"{gap_p1_abs:+.3f}s", delta_color="inverse")
+        g_col2.metric(f"{p2} vs Purple", f"{gap_p2_abs:+.3f}s", delta_color="inverse")
+        g_col3.metric(f"{p1} vs {p2}", f"{gap_rel:+.3f}s", delta_color="off")
+
+        st.divider()
+
+        # Grafici Telemetria
+        active_rows = []
+        if show_delta: active_rows.append("DELTA (s)")
+        if show_speed: active_rows.append("VELOCITÀ (km/h)")
+        if show_throttle: active_rows.append("GAS (%)")
+        if show_brake: active_rows.append("FRENO")
+
+        if active_rows:
             t1 = b1.get_telemetry().add_distance()
             t2 = b2.get_telemetry().add_distance()
-            delta, ref_t, _ = fastf1.utils.delta_time(b1, b2)
-            fig = make_subplots(rows=len(active_plots), cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=active_plots)
-            curr_row = 1
+            delta_trace, ref_t, _ = fastf1.utils.delta_time(b1, b2)
+            fig_tel = make_subplots(rows=len(active_rows), cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=active_rows)
+            
+            curr = 1
             if show_delta:
-                fig.add_trace(go.Scatter(x=ref_t['Distance'], y=delta, name="Delta", fill='tozeroy', line=dict(color='white')), row=curr_row, col=1)
-                curr_row += 1
+                fig_tel.add_trace(go.Scatter(x=ref_t['Distance'], y=delta_trace, name="Gap Trace", fill='tozeroy', line=dict(color='white')), row=curr, col=1)
+                curr += 1
             if show_speed:
-                fig.add_trace(go.Scatter(x=t1['Distance'], y=t1['Speed'], name=p1, line=dict(color=c1)), row=curr_row, col=1)
-                fig.add_trace(go.Scatter(x=t2['Distance'], y=t2['Speed'], name=p2, line=dict(color=c2)), row=curr_row, col=1)
-                curr_row += 1
+                fig_tel.add_trace(go.Scatter(x=t1['Distance'], y=t1['Speed'], name=p1, line=dict(color=c1)), row=curr, col=1)
+                fig_tel.add_trace(go.Scatter(x=t2['Distance'], y=t2['Speed'], name=p2, line=dict(color=c2)), row=curr, col=1)
+                curr += 1
             if show_throttle:
-                fig.add_trace(go.Scatter(x=t1['Distance'], y=t1['Throttle'], name=f"Gas {p1}", line=dict(color=c1, dash='dot')), row=curr_row, col=1)
-                fig.add_trace(go.Scatter(x=t2['Distance'], y=t2['Throttle'], name=f"Gas {p2}", line=dict(color=c2, dash='dot')), row=curr_row, col=1)
-                curr_row += 1
+                fig_tel.add_trace(go.Scatter(x=t1['Distance'], y=t1['Throttle'], name=p1, line=dict(color=c1, dash='dot')), row=curr, col=1)
+                fig_tel.add_trace(go.Scatter(x=t2['Distance'], y=t2['Throttle'], name=p2, line=dict(color=c2, dash='dot')), row=curr, col=1)
+                curr += 1
             if show_brake:
-                fig.add_trace(go.Scatter(x=t1['Distance'], y=t1['Brake'], name=f"Freno {p1}", line=dict(color=c1)), row=curr_row, col=1)
-                fig.add_trace(go.Scatter(x=t2['Distance'], y=t2['Brake'], name=f"Freno {p2}", line=dict(color=c2)), row=curr_row, col=1)
-            fig.update_layout(template="plotly_dark", height=250*len(active_plots), showlegend=False, margin=dict(l=5, r=5, t=30, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+                fig_tel.add_trace(go.Scatter(x=t1['Distance'], y=t1['Brake'], name=p1, line=dict(color=c1)), row=curr, col=1)
+                fig_tel.add_trace(go.Scatter(x=t2['Distance'], y=t2['Brake'], name=p2, line=dict(color=c2)), row=curr, col=1)
 
-    else:
-        # ==========================================
-        # 📈 MODALITÀ PASSO GARA (TABELLE RIPRISTINATE)
-        # ==========================================
+            fig_tel.update_layout(template="plotly_dark", height=230*len(active_rows), margin=dict(l=0,r=0,t=30,b=0), showlegend=False)
+            st.plotly_chart(fig_tel, use_container_width=True)
+
+    # --- TAB PASSO GARA ---
+    with tab_pace:
         l1 = get_cleaned_laps(laps_all.pick_driver(p1))
         l2 = get_cleaned_laps(laps_all.pick_driver(p2))
-
-        avg1 = l1['LapTime'].dt.total_seconds().mean()
-        avg2 = l2['LapTime'].dt.total_seconds().mean()
         
-        st.metric("Delta Medio Generale", f"{(avg1-avg2):+.3f}s", delta_color="inverse")
-        m1, m2 = st.columns(2)
-        m1.metric(f"Media {p1}", format_laptime(avg1))
-        m2.metric(f"Media {p2}", format_laptime(avg2))
+        s1 = int(laps_all.pick_driver(p1)['Stint'].max() - 1)
+        s2 = int(laps_all.pick_driver(p2)['Stint'].max() - 1)
 
-        # --- TABELLA COMPOUND ---
-        st.subheader("🧪 Passo per Mescola")
-        l_combined = pd.concat([l1, l2]).copy()
-        l_combined['Secs'] = l_combined['LapTime'].dt.total_seconds()
-        comp_summary = l_combined.groupby(['Driver', 'Compound'])['Secs'].agg(['mean', 'count']).reset_index()
-        comp_summary['Passo Medio'] = comp_summary['mean'].apply(format_laptime)
-        st.dataframe(comp_summary[['Driver', 'Compound', 'Passo Medio', 'count']].rename(columns={'count':'Giri'}), 
-                     use_container_width=True, hide_index=True)
+        st.write(f"📊 **Soste:** {p1}: `{s1}` | {p2}: `{s2}`")
 
-        # --- GRAFICO ---
         fig_pg = go.Figure()
-        for p, l, color in [(p1, l1, c1), (p2, l2, c2)]:
-            t_s = l['LapTime'].dt.total_seconds()
-            fig_pg.add_trace(go.Scatter(x=l['LapNumber'], y=t_s, name=p, line=dict(color=color, width=2),
-                                        customdata=[format_laptime(t) for t in t_s], hovertemplate="%{customdata}"))
-        fig_pg.update_layout(template="plotly_dark", height=400, margin=dict(l=5, r=5, t=10, b=10), legend=dict(orientation="h", y=1.1))
+        all_s = []
+        for p, l, col in [(p1, l1, c1), (p2, l2, c2)]:
+            s = l['LapTime'].dt.total_seconds()
+            all_s.extend(s.tolist())
+            fig_pg.add_trace(go.Scatter(x=l['LapNumber'], y=s, name=p, line=dict(color=col, width=3), mode='lines+markers',
+                                        customdata=[format_laptime(v) for v in s], hovertemplate="Giro %{x}: %{customdata}"))
+        
+        if all_s:
+            ticks = np.arange(np.floor(min(all_s)), np.ceil(max(all_s)) + 1, 0.5)
+            fig_pg.update_layout(yaxis=dict(tickmode='array', tickvals=ticks, ticktext=[format_laptime(v) for v in ticks]))
+        
+        fig_pg.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_pg, use_container_width=True)
 
-        # --- LOG DETTAGLIATO ---
-        with st.expander("📋 Log Giri Completo"):
-            full_log = pd.concat([l1, l2])[['Driver', 'LapNumber', 'LapTime', 'Compound', 'TyreLife']].copy()
-            full_log['LapTime'] = full_log['LapTime'].dt.total_seconds().apply(format_laptime)
-            full_log.columns = ['Pilota', 'Giro', 'Tempo', 'Gomma', 'Età']
-            st.dataframe(full_log.sort_values(['Giro', 'Pilota'], ascending=[False, True]), 
-                         use_container_width=True, hide_index=True)
+        st.subheader("🧪 Riepilogo Compound")
+        l_comb = pd.concat([l1, l2])
+        l_comb['Secs'] = l_comb['LapTime'].dt.total_seconds()
+        summ = l_comb.groupby(['Driver', 'Compound'])['Secs'].agg(['mean', 'count']).reset_index()
+        summ['Passo Medio'] = summ['mean'].apply(format_laptime)
+        st.dataframe(summ[['Driver', 'Compound', 'Passo Medio', 'count']].rename(columns={'count':'Giri'}), use_container_width=True, hide_index=True)
+
+        with st.expander("📋 Log Giri Dettagliato"):
+            log = pd.concat([l1, l2])[['Driver', 'LapNumber', 'LapTime', 'Compound', 'TyreLife']].copy()
+            log['LapTime'] = log['LapTime'].dt.total_seconds().apply(format_laptime)
+            st.dataframe(log.sort_values(['LapNumber', 'Driver'], ascending=[False, True]), use_container_width=True, hide_index=True)
 
 else:
-    st.info("👈 Apri il menu e clicca su 'CARICA DATI'")
+    st.info("👈 Seleziona anno e circuito dalla sidebar, poi clicca su AGGIORNA DATI")
